@@ -1,10 +1,66 @@
-import 'package:intl/intl.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/material.dart';
 
-String formatDate(int timestamp) {
-  try {
-    final dt = DateTime.fromMillisecondsSinceEpoch(timestamp * 1000, isUtc: false);
-    return DateFormat('d MMM').format(dt);
-  } catch (e) {
-    return '';
+LineChartData buildLineChartData(
+  List<double> temp,
+  List<double>? humidity,
+  List<double>? precipitation,
+  List<String> labels,
+  BuildContext context,
+) {
+  final primary = Theme.of(context).colorScheme.primary;
+  final secondary = Theme.of(context).colorScheme.secondary;
+
+  List<LineChartBarData> lines = [];
+
+  lines.add(LineChartBarData(
+    spots: List.generate(temp.length, (i) => FlSpot(i.toDouble(), temp[i])),
+    isCurved: true,
+    color: primary,
+    barWidth: 3,
+    dotData: FlDotData(show: true),
+  ));
+
+  if (humidity != null) {
+    lines.add(LineChartBarData(
+      spots: List.generate(humidity.length, (i) => FlSpot(i.toDouble(), humidity[i])),
+      isCurved: true,
+      color: secondary,
+      barWidth: 2,
+      dotData: FlDotData(show: false),
+    ));
   }
+
+  if (precipitation != null) {
+    lines.add(LineChartBarData(
+      spots:
+          List.generate(precipitation.length, (i) => FlSpot(i.toDouble(), precipitation[i])),
+      isCurved: true,
+      color: Colors.green,
+      barWidth: 2,
+      dotData: FlDotData(show: false),
+    ));
+  }
+
+  return LineChartData(
+    titlesData: FlTitlesData(
+      leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+      bottomTitles: AxisTitles(
+        sideTitles: SideTitles(
+          showTitles: true,
+          getTitlesWidget: (value, meta) {
+            final idx = value.toInt();
+            if (idx >= 0 && idx < labels.length) {
+              return Padding(
+                  padding: const EdgeInsets.only(top: 6.0), child: Text(labels[idx], style: const TextStyle(fontSize: 10)));
+            }
+            return const Text('');
+          },
+        ),
+      ),
+    ),
+    borderData: FlBorderData(show: true),
+    gridData: FlGridData(show: true),
+    lineBarsData: lines,
+  );
 }
