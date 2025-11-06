@@ -20,23 +20,26 @@ class AnalysisScreen extends StatelessWidget {
     }
 
     final futureDays = data['daily'];
-    final pastTemps = past.take(7).map((e) => e['current']?['temp'] ?? 0.0).toList().reversed.toList();
-    final pastLabels = past.take(7).map((e) => formatDate(e['dt'] as int)).toList().reversed.toList();
-    final futureTemps = List.generate(7, (i) => (futureDays[i]['temp']['day'] as num).toDouble());
-    final futureHumidity = List.generate(7, (i) => (futureDays[i]['humidity'] as num).toDouble());
-    final futureLabels = List.generate(7, (i) => formatDate(futureDays[i]['dt'] as int));
+    final pastTemps = past.take(15).map((e) => e['current']?['temp'] ?? 0.0).toList().reversed.toList();
+    final pastLabels = past.take(15).map((e) => formatDate(e['dt'] as int)).toList().reversed.toList();
+    final futureTemps = List.generate(15, (i) {
+      final idx = i < futureDays.length ? i : futureDays.length - 1;
+      return (futureDays[idx]['temp']['day'] as num).toDouble();
+    });
+    final futureLabels = List.generate(15, (i) {
+      final idx = i < futureDays.length ? i : futureDays.length - 1;
+      return formatDate(futureDays[idx]['dt'] as int);
+    });
 
-    // Temperature averages
+    // Basic averages
     final avgPast = pastTemps.isNotEmpty ? pastTemps.reduce((a, b) => a + b) / pastTemps.length : 0;
     final avgFuture = futureTemps.isNotEmpty ? futureTemps.reduce((a, b) => a + b) / futureTemps.length : 0;
 
-    // Warmest & coldest days
-    final warmestDay = futureDays.reduce((a, b) =>
-        (a['temp']['day'] as num) > (b['temp']['day'] as num) ? a : b);
-    final coldestDay = futureDays.reduce((a, b) =>
-        (a['temp']['day'] as num) < (b['temp']['day'] as num) ? a : b);
+    // Humidity & rain overview
+    final avgHumidity = futureDays.map((d) => (d['humidity'] as num).toDouble()).reduce((a, b) => a + b) / futureDays.length;
+    final avgRainChance = (futureDays.map((d) => (d['pop'] ?? 0.0) * 100).reduce((a, b) => a + b)) / futureDays.length;
 
-    // Weather condition analysis
+    // Condition analysis
     final conditionCount = {'Sunny': 0, 'Cloudy': 0, 'Rainy': 0};
     for (var d in futureDays) {
       final main = (d['weather'][0]['main'] ?? '').toString().toLowerCase();
@@ -49,8 +52,197 @@ class AnalysisScreen extends StatelessWidget {
       }
     }
 
-    final totalDays = futureDays.length.toDouble();
-    final pieSections = conditionCount.entries.map((entry) {
+    // Extended combined 30-day labels and temps
+    final combinedTemps = [...pastTemps, ...futureTemps];
+    final combinedLabels = [...pastLabels, ...futureLabels];
+
+    // Climate insights
+    final minTemp = combinedTemps.reduce((a, b) => a < b ? a : b);
+    final maxTemp = combinedTemps.reduce((a, b) => a > b ? a : b);
+    final variation = (maxTemp - minTemp).abs();
+    final comfort = _comfortLabel(avgFuture, avgHumidity);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Weather Analysis')),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _sectionTitle(context, 'Temperature Comparison (7 Days)'),
+          _tempChart(futureLabels, pastTemps, futureTemps),
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'Humidity Trend (Next 7 Days)'),
+          _humidityChart(futureLabels, futureDays),
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'Rain Probability (Next 7 Days)'),
+          _rainChart(futureLabels, futureDays),
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'Weather Condition Share'),
+          _conditionPie(conditionCount),
+          const SizedBox(height: 20),
+          _sectionTitle(context, '30-Day Climate Analysis'),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 260,
+            child: LineChart(LineChartData(
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    getTitlesWidget: (v, meta) {
+                      final idx = v.toInt();
+                      if (idx >= 0 && idx < combinedLabels.length) {
+                        return Text(combinedLabels[idx],
+                            style: const TextStyle(fontSize: 9));
+                      }
+                      return const SizedBox();
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+              ),
+              lineBarsData: [
+                LineChartBarData(
+                  spots: List.generate(combinedTemps.length,
+                      (i) => FlSpot(i.toDouble(), combinedTemps[i].toDouble())),
+                  isCurved: true,
+                  color: Colors.purple,
+                  barWidth: 3,
+                  dotData: FlDotData(show: false),
+                ),
+              ],
+            )),
+          ),
+          const SizedBox(height: 10),
+          Text(
+              'Avg past 15 days: ${avgPast.toStringAsFixed(1)}°C | '
+              'Avg next 15 days: ${avgFuture.toStringAsFixed(1)}°C'),
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'Climate Insights'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Temperature variation: ${variation.toStringAsFixed(1)}°C'),
+                Text('Average humidity: ${avgHumidity.toStringAsFixed(0)}%'),
+                Text('Average rainfall chance: ${avgRainChance.toStringAsFixed(0)}%'),
+                Text('Dominant condition: ${_findDominant(conditionCount)}'),
+                Text('Overall comfort: $comfort'),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 40),
+        ]),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(BuildContext context, String title) => Text(
+        title,
+        style: Theme.of(context).textTheme.titleLarge,
+      );
+
+  Widget _tempChart(List<String> labels, List pastTemps, List futureTemps) {
+    return SizedBox(
+      height: 250,
+      child: LineChart(LineChartData(
+        titlesData: FlTitlesData(
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (v, meta) {
+                final idx = v.toInt();
+                if (idx >= 0 && idx < labels.length) {
+                  return Text(labels[idx], style: const TextStyle(fontSize: 10));
+                }
+                return const SizedBox();
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: List.generate(pastTemps.length, (i) => FlSpot(i.toDouble(), pastTemps[i])),
+            color: Colors.orange,
+            barWidth: 3,
+            isCurved: true,
+          ),
+          LineChartBarData(
+            spots: List.generate(futureTemps.length, (i) => FlSpot(i.toDouble(), futureTemps[i])),
+            color: Colors.blue,
+            barWidth: 3,
+            isCurved: true,
+          ),
+        ],
+      )),
+    );
+  }
+
+  Widget _humidityChart(List<String> labels, List daily) {
+    final humidity = List.generate(daily.length, (i) => (daily[i]['humidity'] as num).toDouble());
+    return SizedBox(
+      height: 250,
+      child: LineChart(LineChartData(
+        titlesData: FlTitlesData(
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (v, meta) {
+                final idx = v.toInt();
+                if (idx >= 0 && idx < labels.length) {
+                  return Text(labels[idx], style: const TextStyle(fontSize: 10));
+                }
+                return const SizedBox();
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
+        ),
+        lineBarsData: [
+          LineChartBarData(
+            spots: List.generate(
+                humidity.length, (i) => FlSpot(i.toDouble(), humidity[i])),
+            color: Colors.green,
+            isCurved: true,
+            barWidth: 3,
+          ),
+        ],
+      )),
+    );
+  }
+
+  Widget _rainChart(List<String> labels, List daily) {
+    return SizedBox(
+      height: 220,
+      child: BarChart(BarChartData(
+        alignment: BarChartAlignment.spaceAround,
+        barGroups: List.generate(daily.length, (i) {
+          final rain = (daily[i]['pop'] ?? 0) * 100;
+          return BarChartGroupData(x: i, barRods: [
+            BarChartRodData(toY: rain.toDouble(), width: 14, color: Colors.lightBlueAccent)
+          ]);
+        }),
+        titlesData: FlTitlesData(
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (v, meta) {
+                final idx = v.toInt();
+                if (idx >= 0 && idx < labels.length) {
+                  return Text(labels[idx], style: const TextStyle(fontSize: 10));
+                }
+                return const SizedBox();
+              },
+            ),
+          ),
+        ),
+      )),
+    );
+  }
+
+  Widget _conditionPie(Map<String, int> conditionCount) {
+    final totalDays = conditionCount.values.reduce((a, b) => a + b).toDouble();
+    final sections = conditionCount.entries.map((entry) {
       final percent = (entry.value / totalDays) * 100;
       Color color;
       switch (entry.key) {
@@ -67,171 +259,19 @@ class AnalysisScreen extends StatelessWidget {
         color: color,
         value: entry.value.toDouble(),
         title: '${entry.key}\n${percent.toStringAsFixed(0)}%',
-        radius: 60,
+        radius: 55,
         titleStyle: const TextStyle(color: Colors.white, fontSize: 12),
       );
     }).toList();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Weather Analysis')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // -------------------- TEMPERATURE TREND --------------------
-          Text('Temperature Comparison',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 250,
-            child: LineChart(LineChartData(
-              titlesData: FlTitlesData(
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    getTitlesWidget: (v, meta) {
-                      final idx = v.toInt();
-                      if (idx >= 0 && idx < futureLabels.length) {
-                        return Text(futureLabels[idx],
-                            style: const TextStyle(fontSize: 10));
-                      }
-                      return const SizedBox();
-                    },
-                  ),
-                ),
-                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-              ),
-              lineBarsData: [
-                LineChartBarData(
-                  spots: List.generate(
-                      pastTemps.length, (i) => FlSpot(i.toDouble(), pastTemps[i])),
-                  color: Colors.orange,
-                  barWidth: 3,
-                  isCurved: true,
-                  dotData: FlDotData(show: false),
-                ),
-                LineChartBarData(
-                  spots: List.generate(
-                      futureTemps.length, (i) => FlSpot(i.toDouble(), futureTemps[i])),
-                  color: Colors.blue,
-                  barWidth: 3,
-                  isCurved: true,
-                  dotData: FlDotData(show: false),
-                ),
-              ],
-            )),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Avg past week: ${avgPast.toStringAsFixed(1)}°C | '
-            'Avg next week: ${avgFuture.toStringAsFixed(1)}°C',
-            style: const TextStyle(fontSize: 15),
-          ),
-          const SizedBox(height: 20),
-
-          // -------------------- HUMIDITY TREND --------------------
-          Text('Humidity Trend (Next 7 Days)',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 250,
-            child: LineChart(LineChartData(
-              titlesData: FlTitlesData(
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    getTitlesWidget: (v, meta) {
-                      final idx = v.toInt();
-                      if (idx >= 0 && idx < futureLabels.length) {
-                        return Text(futureLabels[idx],
-                            style: const TextStyle(fontSize: 10));
-                      }
-                      return const SizedBox();
-                    },
-                  ),
-                ),
-                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-              ),
-              lineBarsData: [
-                LineChartBarData(
-                  spots: List.generate(
-                      futureHumidity.length, (i) => FlSpot(i.toDouble(), futureHumidity[i])),
-                  color: Colors.green,
-                  barWidth: 3,
-                  isCurved: true,
-                  dotData: FlDotData(show: false),
-                ),
-              ],
-            )),
-          ),
-          const SizedBox(height: 20),
-
-          // -------------------- RAIN PROBABILITY --------------------
-          Text('Rain Probability (Next 7 Days)',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 220,
-            child: BarChart(BarChartData(
-              alignment: BarChartAlignment.spaceAround,
-              barGroups: List.generate(futureDays.length, (i) {
-                final rain = (futureDays[i]['pop'] ?? 0) * 100;
-                return BarChartGroupData(x: i, barRods: [
-                  BarChartRodData(
-                      toY: rain.toDouble(), width: 16, color: Colors.lightBlueAccent)
-                ]);
-              }),
-              titlesData: FlTitlesData(
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    getTitlesWidget: (v, meta) {
-                      final idx = v.toInt();
-                      if (idx >= 0 && idx < futureLabels.length) {
-                        return Text(futureLabels[idx],
-                            style: const TextStyle(fontSize: 10));
-                      }
-                      return const SizedBox();
-                    },
-                  ),
-                ),
-              ),
-            )),
-          ),
-          const SizedBox(height: 20),
-
-          // -------------------- WEATHER CONDITION PIE --------------------
-          Text('Weather Condition Share (Next 7 Days)',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          Center(
-            child: SizedBox(
-              height: 250,
-              child: PieChart(PieChartData(
-                sectionsSpace: 2,
-                centerSpaceRadius: 40,
-                sections: pieSections,
-              )),
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // -------------------- SUMMARY --------------------
-          Text('Summary', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Warmest upcoming day: ${formatDate(warmestDay['dt'])} '
-                    '(${(warmestDay['temp']['day'] as num).toStringAsFixed(1)}°C)'),
-                Text('Coldest upcoming day: ${formatDate(coldestDay['dt'])} '
-                    '(${(coldestDay['temp']['day'] as num).toStringAsFixed(1)}°C)'),
-                Text('Temperature difference: ${(avgFuture - avgPast).toStringAsFixed(1)}°C'),
-                Text('Dominant condition: ${_findDominant(conditionCount)}'),
-              ]),
-            ),
-          ),
-        ]),
+    return Center(
+      child: SizedBox(
+        height: 250,
+        child: PieChart(PieChartData(
+          sectionsSpace: 2,
+          centerSpaceRadius: 40,
+          sections: sections,
+        )),
       ),
     );
   }
@@ -242,5 +282,19 @@ class AnalysisScreen extends StatelessWidget {
       if (map[k]! > map[maxKey]!) maxKey = k;
     }
     return maxKey;
+  }
+
+  String _comfortLabel(double avgTemp, double avgHumidity) {
+    if (avgTemp >= 20 && avgTemp <= 30 && avgHumidity < 70) {
+      return 'Comfortable';
+    } else if (avgTemp < 20) {
+      return 'Cool & Pleasant';
+    } else if (avgTemp > 30 && avgHumidity > 70) {
+      return 'Hot & Humid';
+    } else if (avgTemp > 35) {
+      return 'Very Hot';
+    } else {
+      return 'Moderate';
+    }
   }
 }
