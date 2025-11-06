@@ -1,300 +1,89 @@
-import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:fl_chart/fl_chart.dart';
-import '../provider/weather_provider.dart';
-import '../utils/date_utils.dart';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
-class AnalysisScreen extends StatelessWidget {
-  const AnalysisScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = Provider.of<WeatherProvider>(context);
-    final data = provider.weatherData;
-    final past = provider.pastData;
-
-    if (data == null || data['daily'] == null || data['daily'].isEmpty) {
-      return const Scaffold(
-        body: Center(child: Text('No weather data available yet.')),
-      );
-    }
-
-    final futureDays = data['daily'];
-    final pastTemps = past.take(15).map((e) => e['current']?['temp'] ?? 0.0).toList().reversed.toList();
-    final pastLabels = past.take(15).map((e) => formatDate(e['dt'] as int)).toList().reversed.toList();
-    final futureTemps = List.generate(15, (i) {
-      final idx = i < futureDays.length ? i : futureDays.length - 1;
-      return (futureDays[idx]['temp']['day'] as num).toDouble();
-    });
-    final futureLabels = List.generate(15, (i) {
-      final idx = i < futureDays.length ? i : futureDays.length - 1;
-      return formatDate(futureDays[idx]['dt'] as int);
-    });
-
-    // Basic averages
-    final avgPast = pastTemps.isNotEmpty ? pastTemps.reduce((a, b) => a + b) / pastTemps.length : 0;
-    final avgFuture = futureTemps.isNotEmpty ? futureTemps.reduce((a, b) => a + b) / futureTemps.length : 0;
-
-    // Humidity & rain overview
-    final avgHumidity = futureDays.map((d) => (d['humidity'] as num).toDouble()).reduce((a, b) => a + b) / futureDays.length;
-    final avgRainChance = (futureDays.map((d) => (d['pop'] ?? 0.0) * 100).reduce((a, b) => a + b)) / futureDays.length;
-
-    // Condition analysis
-    final conditionCount = {'Sunny': 0, 'Cloudy': 0, 'Rainy': 0};
-    for (var d in futureDays) {
-      final main = (d['weather'][0]['main'] ?? '').toString().toLowerCase();
-      if (main.contains('rain')) {
-        conditionCount['Rainy'] = conditionCount['Rainy']! + 1;
-      } else if (main.contains('cloud')) {
-        conditionCount['Cloudy'] = conditionCount['Cloudy']! + 1;
-      } else {
-        conditionCount['Sunny'] = conditionCount['Sunny']! + 1;
-      }
-    }
-
-    // Extended combined 30-day labels and temps
-    final combinedTemps = [...pastTemps, ...futureTemps];
-    final combinedLabels = [...pastLabels, ...futureLabels];
-
-    // Climate insights
-    final minTemp = combinedTemps.reduce((a, b) => a < b ? a : b);
-    final maxTemp = combinedTemps.reduce((a, b) => a > b ? a : b);
-    final variation = (maxTemp - minTemp).abs();
-    final comfort = _comfortLabel(avgFuture, avgHumidity);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Weather Analysis')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _sectionTitle(context, 'Temperature Comparison (7 Days)'),
-          _tempChart(futureLabels, pastTemps, futureTemps),
-          const SizedBox(height: 20),
-          _sectionTitle(context, 'Humidity Trend (Next 7 Days)'),
-          _humidityChart(futureLabels, futureDays),
-          const SizedBox(height: 20),
-          _sectionTitle(context, 'Rain Probability (Next 7 Days)'),
-          _rainChart(futureLabels, futureDays),
-          const SizedBox(height: 20),
-          _sectionTitle(context, 'Weather Condition Share'),
-          _conditionPie(conditionCount),
-          const SizedBox(height: 20),
-          _sectionTitle(context, '30-Day Climate Analysis'),
-          const SizedBox(height: 8),
-          SizedBox(
-            height: 260,
-            child: LineChart(LineChartData(
-              titlesData: FlTitlesData(
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    getTitlesWidget: (v, meta) {
-                      final idx = v.toInt();
-                      if (idx >= 0 && idx < combinedLabels.length) {
-                        return Text(combinedLabels[idx],
-                            style: const TextStyle(fontSize: 9));
-                      }
-                      return const SizedBox();
-                    },
-                  ),
-                ),
-                leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-              ),
-              lineBarsData: [
-                LineChartBarData(
-                  spots: List.generate(combinedTemps.length,
-                      (i) => FlSpot(i.toDouble(), combinedTemps[i].toDouble())),
-                  isCurved: true,
-                  color: Colors.purple,
-                  barWidth: 3,
-                  dotData: FlDotData(show: false),
-                ),
-              ],
-            )),
-          ),
-          const SizedBox(height: 10),
-          Text(
-              'Avg past 15 days: ${avgPast.toStringAsFixed(1)}°C | '
-              'Avg next 15 days: ${avgFuture.toStringAsFixed(1)}°C'),
-          const SizedBox(height: 20),
-          _sectionTitle(context, 'Climate Insights'),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Temperature variation: ${variation.toStringAsFixed(1)}°C'),
-                Text('Average humidity: ${avgHumidity.toStringAsFixed(0)}%'),
-                Text('Average rainfall chance: ${avgRainChance.toStringAsFixed(0)}%'),
-                Text('Dominant condition: ${_findDominant(conditionCount)}'),
-                Text('Overall comfort: $comfort'),
-              ]),
-            ),
-          ),
-          const SizedBox(height: 40),
-        ]),
-      ),
-    );
+class WeatherProvider extends ChangeNotifier {
+  final String? apiKey;
+  WeatherProvider({required this.apiKey}) {
+    loadPastData();
   }
 
-  Widget _sectionTitle(BuildContext context, String title) => Text(
-        title,
-        style: Theme.of(context).textTheme.titleLarge,
-      );
+  Map<String, dynamic>? weatherData;
+  List<Map<String, dynamic>> pastData = [];
+  String? lastCity;
 
-  Widget _tempChart(List<String> labels, List pastTemps, List futureTemps) {
-    return SizedBox(
-      height: 250,
-      child: LineChart(LineChartData(
-        titlesData: FlTitlesData(
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              getTitlesWidget: (v, meta) {
-                final idx = v.toInt();
-                if (idx >= 0 && idx < labels.length) {
-                  return Text(labels[idx], style: const TextStyle(fontSize: 10));
-                }
-                return const SizedBox();
-              },
-            ),
-          ),
-          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-        ),
-        lineBarsData: [
-          LineChartBarData(
-            spots: List.generate(pastTemps.length, (i) => FlSpot(i.toDouble(), pastTemps[i])),
-            color: Colors.orange,
-            barWidth: 3,
-            isCurved: true,
-          ),
-          LineChartBarData(
-            spots: List.generate(futureTemps.length, (i) => FlSpot(i.toDouble(), futureTemps[i])),
-            color: Colors.blue,
-            barWidth: 3,
-            isCurved: true,
-          ),
-        ],
-      )),
-    );
-  }
+  bool get hasApiKey => (apiKey != null && apiKey!.isNotEmpty);
 
-  Widget _humidityChart(List<String> labels, List daily) {
-    final humidity = List.generate(daily.length, (i) => (daily[i]['humidity'] as num).toDouble());
-    return SizedBox(
-      height: 250,
-      child: LineChart(LineChartData(
-        titlesData: FlTitlesData(
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              getTitlesWidget: (v, meta) {
-                final idx = v.toInt();
-                if (idx >= 0 && idx < labels.length) {
-                  return Text(labels[idx], style: const TextStyle(fontSize: 10));
-                }
-                return const SizedBox();
-              },
-            ),
-          ),
-          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
-        ),
-        lineBarsData: [
-          LineChartBarData(
-            spots: List.generate(
-                humidity.length, (i) => FlSpot(i.toDouble(), humidity[i])),
-            color: Colors.green,
-            isCurved: true,
-            barWidth: 3,
-          ),
-        ],
-      )),
-    );
-  }
-
-  Widget _rainChart(List<String> labels, List daily) {
-    return SizedBox(
-      height: 220,
-      child: BarChart(BarChartData(
-        alignment: BarChartAlignment.spaceAround,
-        barGroups: List.generate(daily.length, (i) {
-          final rain = (daily[i]['pop'] ?? 0) * 100;
-          return BarChartGroupData(x: i, barRods: [
-            BarChartRodData(toY: rain.toDouble(), width: 14, color: Colors.lightBlueAccent)
-          ]);
-        }),
-        titlesData: FlTitlesData(
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              getTitlesWidget: (v, meta) {
-                final idx = v.toInt();
-                if (idx >= 0 && idx < labels.length) {
-                  return Text(labels[idx], style: const TextStyle(fontSize: 10));
-                }
-                return const SizedBox();
-              },
-            ),
-          ),
-        ),
-      )),
-    );
-  }
-
-  Widget _conditionPie(Map<String, int> conditionCount) {
-    final totalDays = conditionCount.values.reduce((a, b) => a + b).toDouble();
-    final sections = conditionCount.entries.map((entry) {
-      final percent = (entry.value / totalDays) * 100;
-      Color color;
-      switch (entry.key) {
-        case 'Rainy':
-          color = Colors.blueAccent;
-          break;
-        case 'Cloudy':
-          color = Colors.grey;
-          break;
-        default:
-          color = Colors.orangeAccent;
-      }
-      return PieChartSectionData(
-        color: color,
-        value: entry.value.toDouble(),
-        title: '${entry.key}\n${percent.toStringAsFixed(0)}%',
-        radius: 55,
-        titleStyle: const TextStyle(color: Colors.white, fontSize: 12),
-      );
-    }).toList();
-
-    return Center(
-      child: SizedBox(
-        height: 250,
-        child: PieChart(PieChartData(
-          sectionsSpace: 2,
-          centerSpaceRadius: 40,
-          sections: sections,
-        )),
-      ),
-    );
-  }
-
-  String _findDominant(Map<String, int> map) {
-    var maxKey = map.keys.first;
-    for (var k in map.keys) {
-      if (map[k]! > map[maxKey]!) maxKey = k;
-    }
-    return maxKey;
-  }
-
-  String _comfortLabel(double avgTemp, double avgHumidity) {
-    if (avgTemp >= 20 && avgTemp <= 30 && avgHumidity < 70) {
-      return 'Comfortable';
-    } else if (avgTemp < 20) {
-      return 'Cool & Pleasant';
-    } else if (avgTemp > 30 && avgHumidity > 70) {
-      return 'Hot & Humid';
-    } else if (avgTemp > 35) {
-      return 'Very Hot';
+  Future<void> fetchWeatherByCoords(double lat, double lon) async {
+    if (!hasApiKey) throw Exception('API key missing');
+    final url =
+        'https://api.openweathermap.org/data/2.5/onecall?lat=$lat&lon=$lon&exclude=minutely,hourly,alerts&appid=$apiKey&units=metric';
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      weatherData = json.decode(response.body);
+      await _storePastData(weatherData!);
+      notifyListeners();
     } else {
-      return 'Moderate';
+      throw Exception('Failed to load weather: ${response.statusCode}');
     }
+  }
+
+  Future<void> fetchWeatherByCity(String city) async {
+    if (!hasApiKey) throw Exception('API key missing');
+    final geoUrl =
+        'https://api.openweathermap.org/geo/1.0/direct?q=${Uri.encodeComponent(city)}&limit=1&appid=$apiKey';
+    final geoResp = await http.get(Uri.parse(geoUrl));
+    if (geoResp.statusCode == 200) {
+      final list = json.decode(geoResp.body) as List;
+      if (list.isEmpty) throw Exception('City not found');
+      final first = list.first;
+      final lat = (first['lat'] as num).toDouble();
+      final lon = (first['lon'] as num).toDouble();
+      lastCity = first['name'];
+      await fetchWeatherByCoords(lat, lon);
+    } else {
+      throw Exception('Failed to find city: ${geoResp.statusCode}');
+    }
+  }
+
+  Future<List<String>> fetchCitySuggestions(String query) async {
+    if (query.trim().isEmpty || !hasApiKey) return [];
+    final url =
+        'https://api.openweathermap.org/geo/1.0/direct?q=${Uri.encodeComponent(query)}&limit=5&appid=$apiKey';
+    final resp = await http.get(Uri.parse(url));
+    if (resp.statusCode == 200) {
+      final list = json.decode(resp.body) as List;
+      return list
+          .map((e) =>
+              '${e['name'] ?? ''}${e['state'] != null ? ', ${e['state']}' : ''}, ${e['country'] ?? ''}')
+          .toList();
+    }
+    return [];
+  }
+
+  Future<void> _storePastData(Map<String, dynamic> data) async {
+    final prefs = await SharedPreferences.getInstance();
+    final minimal = {
+      'dt': data['current']?['dt'],
+      'current': data['current'],
+    };
+    pastData.insert(0, Map<String, dynamic>.from(minimal));
+    if (pastData.length > 365) pastData = pastData.sublist(0, 365);
+    prefs.setString('pastData', json.encode(pastData));
+  }
+
+  Future<void> loadPastData() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString('pastData');
+    if (data != null) {
+      try {
+        final decoded = json.decode(data) as List;
+        pastData = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+      } catch (_) {
+        pastData = [];
+      }
+    }
+    notifyListeners();
   }
 }
